@@ -80,24 +80,3 @@ num_rating <- edx %>%
 
 # Number of ratings
 barplot(table(edx$rating))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
