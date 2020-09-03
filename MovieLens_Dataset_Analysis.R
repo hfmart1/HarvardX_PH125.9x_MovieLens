@@ -7,18 +7,16 @@
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
 if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
 
 
 library(tidyverse)
 library(caret)
 library(data.table)
+library(randomForest)
 library(dplyr)
 
-
-###################################################################################################
-# IMPORT AND CLEAN MOVIELENS 10M DATASET
-###################################################################################################
 
 # MovieLens 10M dataset:
 # https://grouplens.org/datasets/movielens/10m/
@@ -81,7 +79,15 @@ genrecount <- edx %>%
   group_by(genres) %>%
   summarise(number = n()) %>%
   arrange(desc(number))
+
 genrecount
+
+#Barplot genrecount
+
+barplot(genrecount$number,
+        main = "Number of movies per genre",
+        names.arg = genrecount$genres)
+
 
 # Which movie has the greatest number of ratings?
 num_rating <- edx %>%
@@ -147,9 +153,9 @@ rmse_2
 
 edx %>%
   group_by(userId) %>%
-  summarise(b_u = mean(rating)) %>%
+  summarise(a_u = mean(rating)) %>%
   filter(n()>=100) %>%
-  ggplot(aes(b_u)) +
+  ggplot(aes(a_u)) +
   geom_histogram(bins = 30, color = "black")
 
 # We notice that some users tend to give more positive or negative reviews. We will call this phenomenon the user-specific effect
@@ -278,6 +284,62 @@ reg_predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit
 regularized_effects_limit <- RMSE(reg_predicted_ratings_limit, validation$rating)
 
 
+########################
+# FOURTH APPROACH
+########################
+
+library(tensorflow)
+install_tensorflow()
+library(keras)
+keras::install_keras()
+
+hello <- tf$constant("Hello")
+print(hello)
+
+
+train_features <- edx%>%
+  mutate(
+  temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
+  release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
+  release_yr = as.numeric(release_yr)                          #...convert to a number
+) %>%
+  select(-everything(), movieId, userId, release_yr)
+
+train_labels <- edx %>%
+  select(rating)
+
+test_features <- edx%>%
+  mutate(
+    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
+    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
+    release_yr = as.numeric(release_yr)                          #...convert to a number
+  ) %>%
+  select(-everything(), movieId, userId, release_yr)
+
+test_labels <- edx %>%
+  select(rating)
+
+model <- keras_model_sequential()
+model %>% 
+  layer_dense(units = 3, activation = 'relu', input_shape = 3) %>% 
+  layer_dense(units = 1, activation = 'softmax')
+
+model %>% summary
+
+
+model %>% compile(
+  loss      = 'categorical_crossentropy',
+  optimizer = optimizer_rmsprop(),
+  metrics   = c('accuracy')
+)
+
+history <- model %>% fit(
+  x = train_features, y = train_labels,
+  epochs           = 200,
+  batch_size       = 20,
+  validation_split = 0
+)
+plot(history)
 
 
 
@@ -292,75 +354,72 @@ regularized_effects_limit <- RMSE(reg_predicted_ratings_limit, validation$rating
 
 
 
+#####################################"
+
+
+############################ TEST2
+
+clean_edx <- edx %>%
+  mutate(
+    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
+    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
+    release_yr = as.numeric(release_yr)                          #...convert to a number
+  ) %>%
+  select(-everything(), movieId, userId, rating, release_yr)
+
+
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+
+knn_fit <- train(rating ~., 
+                 data = clean_edx,
+                 method = "knn",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneLength = 10)
+
+confusionMatrix(predict(train_knn, mnist_27$test, type = "raw"),
+                mnist_27$test$y)$overall["Accuracy"]
 
 
 
+#####################################"
 
 
 
+age <- edx %>%
+  mutate(
+    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
+    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
+    release_yr = as.numeric(release_yr)                          #...convert to a number
+  ) %>%
+  select(-everything(), movieId, rating, release_yr)
+
+age
+
+age %>%
+  group_by(release_yr) %>%
+  ggplot (aes(x=release_yr, y=mean(rating))) +
+  geom_point()
 
 
+# Compute difference to average per movie
+year_averages <- age %>%
+  group_by(movieId) %>%
+  summarise(b_y = mean(rating - mu_hat))
+
+predicted_ratings <- validation %>%
+  left_join(movie_averages, by='movieId') %>%
+  left_join(user_averages, by='userId') %>%
+  left_join(year_averages, by="movieId") %>%
+  mutate(pred = mu_hat + b_i + b_u + 0*b_y) %>%
+  pull(pred)
+
+predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit values lower than 0.5 & values greater than 5
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# age <- edx %>% 
-#   mutate(
-#     temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
-#     release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
-#     release_yr = as.numeric(release_yr)                          #...convert to a number
-#   ) %>%
-#   select(-everything(), movieId, rating, release_yr)
-# 
-# age
-# 
-# 
-# # Compute difference to average per movie
-# year_averages <- age %>% 
-#   group_by(movieId) %>% 
-#   summarise(b_y = mean(rating - mu_hat))
-# 
-# predicted_ratings <- validation %>% 
-#   left_join(movie_averages, by='movieId') %>%
-#   left_join(user_averages, by='userId') %>%
-#   left_join(year_averages, by="movieId") %>%
-#   mutate(pred = mu_hat + b_i + b_u + b_y) %>%
-#   pull(pred)
-# 
-# predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit values lower than 0.5 & values greater than 5
-# 
-# 
-# # RMSE movie effect
-# rmse_5 <- RMSE(predicted_ratings_limit, validation$rating)
-# rmse_5
+# RMSE movie effect
+rmse_5 <- RMSE(predicted_ratings_limit, validation$rating)
+rmse_5
 
 
 
