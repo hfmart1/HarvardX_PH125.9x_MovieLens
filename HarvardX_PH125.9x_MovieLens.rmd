@@ -1,0 +1,595 @@
+---
+title: 'PH125.9x - HarvardX Capstone Project : MovieLens'
+author: "HM"
+date: "9/10/2020"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{R Load packages, include=FALSE}
+
+#########################################################################################
+# IMPORT LIBRARIES
+#########################################################################################
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+
+
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dplyr, warn.conflicts = FALSE)
+library(kableExtra)
+library(ggplot2)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+# Fix size plots
+knitr::opts_chunk$set(fig.width=5, fig.height=3.5, fig.align = "center") 
+
+```
+
+
+```{r Load Dataset, include=FALSE}
+
+#########################################################################################
+# Create edx set, validation set (final hold-out test set)
+#########################################################################################
+
+# Note: this process could take a couple of minutes
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+
+# Validation set will be 10% of MovieLens data
+set.seed(2, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+
+```
+
+
+```{R Load Theme, include=FALSE}
+dslabs::ds_theme_set()
+theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+# Introduction
+
+## Description of the Dataset
+
+The dataset we are going to work with is the Movielens 10M dataset. It consists of ten million movie ratings. We use the provided code to create two datasets: one for training and one for test, each of them containing the following features:
+
+
+| Variable      | Description (Type)                                           |
+| ------------- | ------------------------------------------------------------ |
+| `userId`      | Used to identify users (Integer)                             |
+| `movieId`     | Used to identify movies (Integer)                            |
+| `rating`      | Rating of the movie by user (Double)                         |
+| `timestamp`   | Timestamp of the date of the rating (Integer)                |
+| `title`       | Movie Title and Year (Character)                             |
+| `genres`      | Genres of the movie (Character)                              |
+
+\pagebreak
+
+Lets visualize the first few rows of the training set `edx` to get an idea of what we are dealing with:
+
+```{r echo=FALSE}
+head(edx) %>% 
+  mutate(title = str_trunc(title,40), genres = str_trunc(genres,30)) %>% 
+  kable(format = 'markdown')
+```
+
+```{r include=FALSE}
+
+n_training <- nrow(edx)
+n_test <- nrow(validation)
+n_total <- n_training + n_test
+```
+
+There are `r n_training` items in the training dataset `edx` and `r n_test` items in the test dataset `validation`. In total, the full dataset contains `r n_total` items.
+
+
+## Analyse the Data
+
+
+```{r include=FALSE}
+
+n_distinct_movies <- n_distinct(edx$movieId)
+n_distinct_users <- n_distinct(edx$userId)
+```
+
+Though training set `edx` contains `r n_test` items, it only contains `r n_distinct_movies` distinct movies and `r n_distinct_users` distinct users.
+
+The `edx` dataset as well as the `validation` dataset have been "cleaned" in such a way that movies or users only appearing once have been removed.
+
+Here are the most rated movies in the `edx` dataset:
+
+```{r include=FALSE}
+num_rating <- edx %>%
+  group_by(title) %>%
+  summarise(number = n()) %>%
+  arrange(desc(number))
+```
+
+
+```{r echo=FALSE}
+head(num_rating) %>% 
+  kable(format = 'markdown')
+```
+
+
+Notice that they appear to be "classic" movies, most of them being from the 1990s.
+
+```{r include=FALSE}
+avg_n_ratings <- round(mean(num_rating$number))
+sd_n_ratings <- sd(num_rating$number)
+```
+
+On average each movie has been rated `r avg_n_ratings` times with a standard deviation of `r sd_n_ratings`. This shows that there is a great disparity between movies: some are much more popular than others and have therefore been rated many times
+
+\pagebreak
+
+We also notice that some genres get far more ratings than others:
+
+```{r include=FALSE}
+genrecount <- edx %>%
+  separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>%
+  summarise(number = n()) %>%
+  arrange(desc(number))
+```
+
+
+```{r echo=FALSE}
+barplot(genrecount$number,
+        main = "Number of movies per genre",
+        names.arg = genrecount$genres,
+        las=2,
+        cex.names = 0.7)
+```
+
+
+
+Here we see that drama, comedy and action genres are the most rated whereas film-noir, documentary and IMAX are the least.
+
+Furthermore, by plotting the number of ratings we realize that whole ratings are more popular than half ratings:
+
+```{r echo=FALSE}
+barplot(table(edx$rating),
+        main = "Number of ratings per rating",
+        xlab = "Rating",
+        ylab = "Count of ratings") 
+```
+
+
+## Objective
+
+Our goal is to correctly predict the rating a user is going to give to a movie. This could be useful for a movie recommendation algorithm, similar to the ones used by Netflix or Hulu.
+We will be testing our method on the `validation` dataset and report the RMSE (root-mean-square deviation) for each of the methods used.
+
+$$
+RMSE = \sqrt{\frac{1}{N}\sum (y-\hat{y})^2}
+$$
+With $y$ being the predicted value, $\hat{y}$ being the corresponding expected value in the `validation` dataset, and $N$ represents the number of items in total.
+
+We will try to minimize the `RMSE`.
+
+
+
+# Methods
+
+In order to accurately predict the user rating of a movie we will be conducting our analysis using different approaches.
+We will start with a basic prediction using only the overall mean, from there we will take into account the movie and user biases. Finally we will introduce the concept of regularization which will allow us to penalize movies with only a handful of ratings.
+
+
+## First Approach : overall mean
+
+For this part we will suppose that every movie gets rated the same. We will compute the mean rating in the `edx` dataset and use this value as the predicted rating in the `validation` dataset using this code:
+
+```{R}
+mu_hat <- mean(edx$rating)
+```
+
+This very simple approach doesn't take into account the fact that some movies are better rated than other or that some users tend to be more generous than others with their ratings. We will need to introduce the concept of bias.
+
+## Second Approach : user bias and movie bias
+
+In this part we will study the impact of the user bias and of the movie bias on the rating of a movie.
+
+We know from experience that some movies generally get better ratings and as seen below, some users tend to give higher ratings compared to others:
+
+```{r include=FALSE}
+average_rating_users <- edx %>%
+  group_by(userId) %>%
+  summarise(a_u = mean(rating)) %>%
+  filter(n()>=100) %>%
+  ggplot(aes(a_u)) +
+  geom_histogram(bins = 30, color = "black") +
+  ggtitle("Number of users per average rating") +
+  xlab("Average rating") + ylab("Count of users")
+
+```
+
+```{r echo=FALSE}
+average_rating_users
+```
+
+
+We need to compute the difference between each individual movie average and the average movie rating which we calculate earlier as being `r mu_hat`.
+
+Using this code we compute the difference to average for each movie, we will call this the movie bias:
+
+```{R}
+movie_averages <- edx %>% 
+  group_by(movieId) %>% 
+  summarise(b_m = mean(rating - mu_hat))
+```
+
+After that we can compute the predicted ratings for the movies in the `validation` dataset:
+```{R}
+predicted_ratings <- mu_hat + validation %>% 
+  left_join(movie_averages, by='movieId') %>%
+  pull(b_m)
+```
+
+We now have a vector containing `r n_test` items called `predicted_ratings` which are the predicted ratings for the respected movies in the `validation` dataset. This prediction includes the movie bias.
+
+We can run the same code with a few tweaks to include the user bias and calculated the predicted ratings:
+
+```{R}
+user_averages <- edx %>%
+  left_join(movie_averages, by="movieId") %>%
+  group_by(userId) %>%
+  summarise(b_u = mean(rating - mu_hat - b_m))
+
+
+predicted_ratings_um_bias <- validation %>% 
+  left_join(movie_averages, by='movieId') %>%
+  left_join(user_averages, by='userId') %>%
+  mutate(pred = mu_hat + b_m + b_u) %>%
+  pull(pred)
+```
+
+The result is a vector containing the predicted rating for each movie in the `validation` dataset taking into account the movie as well as the user bias.
+
+## Third Approach: regularization
+
+For this final approach we will introduce the concept of regularization which will allow us to penalize movies with only a few ratings as these are more difficult to predict accurately. We will be trying to better understand the variability of the movie bias.
+
+Lets inspect the best and worst movies in the `edx` dataset:
+
+```{r include=FALSE}
+movie_titles <- edx %>% 
+  select(movieId, title) %>%
+  distinct()
+
+best_movies <- movie_averages %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(desc(b_m)) %>%
+  slice(1:8) %>% 
+  pull(title)
+
+worst_movies <- movie_averages %>%
+  left_join(movie_titles, by="movieId") %>%
+  arrange(b_m) %>%
+  slice(1:8) %>% 
+  pull(title)
+
+```
+
+
+```{r echo=FALSE}
+temp_df <- tibble(best_movies = best_movies,
+           worst_movies = worst_movies)
+
+temp_df %>% 
+  mutate(best_movies = str_trunc(best_movies,50),
+         worst_movies = str_trunc(worst_movies, 50)) %>%
+  kable(format = 'markdown')
+
+```
+
+It appears that the best and worst movies have very few ratings so predicting their rating accurately would be impossible.
+
+
+Our goal is to penalize the movie effect when few users have rated the movie. The regularization formula for calculating the movie bias using our penalty term `p` is:
+$$
+b_i (p) = \frac{1}{p + n} \sum (Y_i - \hat{\mu})
+$$
+We need to choose our penalty term wisely as it must minimize our `RMSE`. We will calculate the `RMSE` of our predicted ratings on the `edx` dataset while testing several values for our penalty. To do so we will use this following code:
+
+```{R}
+# Create a list of penalties we want to calculate the RMSE with
+penalties <- seq(0, 5, 1)
+
+# Function to calculate the RMSE using the penalties list
+m_rmses <- sapply(penalties, function(p){
+  
+  reg_movie_avgs <- edx %>% 
+    group_by(movieId) %>%
+    summarize(regmoviebias = sum(rating - mu_hat)/(n()+p))
+  
+  predicted_ratings <- 
+    edx %>% 
+    left_join(reg_movie_avgs, by = "movieId") %>%
+    left_join(user_averages, by = "userId") %>%
+    mutate(regmoviebias = mu_hat + b_u + regmoviebias) %>%
+    .$regmoviebias
+  
+  return(RMSE(predicted_ratings, edx$rating))
+  
+})
+
+# Determine for which value of p the RMSE is the lowest
+moviepenalty_optimal <- penalties[which.min(m_rmses)]
+
+# Compute the movie averages using the calculated optimal penalty
+reg_movie_avgs <- edx %>% 
+  group_by(movieId) %>%
+  summarize(regmoviebias = sum(rating - mu_hat)/(n()+moviepenalty_optimal))
+
+# Compute the predicted ratings for the movies in the validation dataset
+predicted_ratings <- 
+  validation %>% 
+  left_join(reg_movie_avgs, by = "movieId") %>%
+  left_join(user_averages, by = "userId") %>%
+  mutate(regmoviebias = mu_hat + b_u + regmoviebias) %>%
+  .$regmoviebias
+
+```
+
+
+
+We then plot the `RMSE` against the values of the penalties:
+
+```{r echo=FALSE}
+ggplot(tibble(x =  penalties, y = m_rmses), aes(x = penalties, y = m_rmses)) +
+  geom_line() +
+  geom_point()
+```
+
+
+The minimum is obtained when `p` equals `r moviepenalty_optimal`
+
+We use the same method to determine the best value for `p` with both the movie effect and the user effect. We use the following code: 
+
+
+```{R}
+# Create a list of penalties we want to calculate the RMSE with
+penalties <- seq(0, 1, 0.25)
+
+# Function to calculate the RMSE using the penalties list
+u_rmses <- sapply(penalties, function(p){
+  
+  reg_user_avgs <- edx %>% 
+    left_join(reg_movie_avgs, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(reguserbias = sum(rating - regmoviebias - mu_hat)/(n()+p))
+  
+  predicted_ratings <- 
+    edx %>% 
+    left_join(reg_movie_avgs, by = "movieId") %>%
+    left_join(reg_user_avgs, by = "userId") %>%
+    mutate(regusermoviebias = mu_hat + regmoviebias + reguserbias) %>%
+    .$regusermoviebias
+  
+  return(RMSE(predicted_ratings, edx$rating))
+  
+})
+
+# Determine for which value of p the RMSE is the lowest
+userpenalty_optimal <- penalties[which.min(u_rmses)]  #determine which is lowest
+
+# Compute the user averages using the calculated optimal penalty
+reg_user_avgs <- edx %>% 
+  left_join(reg_movie_avgs, by="movieId") %>%
+  group_by(userId) %>%
+  summarize(reguserbias = sum(rating - regmoviebias - mu_hat)/(n()+userpenalty_optimal))
+
+# Compute the predicted ratings for the movies in the validation dataset
+reg_predicted_ratings <- 
+  validation %>% 
+  left_join(reg_movie_avgs, by = "movieId") %>%
+  left_join(reg_user_avgs, by = "userId") %>%
+  mutate(regusermovie = mu_hat + regmoviebias + reguserbias) %>%
+  .$regusermovie
+
+```
+
+We can then plot the same graph as before with the new penalty:
+
+```{r echo=FALSE}
+ggplot(tibble(x =  penalties, y = u_rmses), aes(x = penalties, y = u_rmses)) +
+  geom_line() +
+  geom_point()
+```
+
+The minimum is obtained when `p` equals `r userpenalty_optimal`
+
+
+We have successfully applied regularization to improve our prediction. However, can further improve our guess.
+
+## Final improvement
+
+By looking at the highest and lowest movie prediction we stumble upon a problem: some of our predictions are either under 0.5 or higher than 5. 
+
+```{r include=FALSE}
+ordered_pred <- sort(reg_predicted_ratings)
+
+lowest_predictions <- head(ordered_pred, n = 7)
+highest_predictions <- tail(ordered_pred, n = 7)
+```
+
+
+```{r echo=FALSE}
+temp_df <- tibble(lowest_predictions = lowest_predictions,
+           highest_predictions = highest_predictions)
+
+temp_df %>% 
+  mutate(lowest_predictions = str_trunc(lowest_predictions,50),
+         highest_predictions = str_trunc(highest_predictions, 50)) %>%
+  kable(format = 'markdown')
+
+```
+
+
+We can fix a lower and an upper limit to avoid this issue. We use the following code:
+
+```{R}
+reg_predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5), 0.5)
+```
+
+
+We now have limited the lowest ratings at 0.5 and the highest at 5.
+
+```{r include=FALSE}
+ordered_pred <- sort(reg_predicted_ratings_limit)
+
+lowest_predictions <- head(ordered_pred, n = 7)
+highest_predictions <- tail(ordered_pred, n = 7)
+```
+
+
+```{r echo=FALSE}
+temp_df <- tibble(lowest_predictions = lowest_predictions,
+           highest_predictions = highest_predictions)
+
+temp_df %>% 
+  mutate(lowest_predictions = str_trunc(lowest_predictions,50),
+         highest_predictions = str_trunc(highest_predictions, 50)) %>%
+  kable(format = 'markdown')
+
+```
+
+\pagebreak
+
+# Results
+
+We have presented the different methods we are going to evaluate. Each method will be used to predict the ratings in the validation dataset and we will compute the RMSE using this code:
+
+```{R}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+## RMSE First Approach
+
+This is the most basic estimate so we are not expecting to be very accurate. We get the following RMSE:
+
+```{R}
+RMSE_overallmean <- RMSE(validation$rating, mu_hat)
+RMSE_overallmean
+```
+
+$$
+RMSE_{overall mean} = 1.060714
+$$
+
+
+## RMSE Second Approach
+
+By computing the movie and user biases we should be able to significantly improve our RMSE. We get the following:
+
+```{R}
+RMSE_biases <- RMSE(validation$rating, predicted_ratings_um_bias)
+RMSE_biases
+```
+
+$$
+RMSE_{biases} = 0.8651915
+$$
+
+## RMSE Third Approach
+
+Now by using regularization we are going to penalize movies and users with very few ratings by introducing a penalty term in our equations.
+
+```{R}
+RMSE_reg <- RMSE(validation$rating, reg_predicted_ratings)
+RMSE_reg
+```
+
+$$
+RMSE_{regularization} = 0.8651017
+$$
+
+
+## RMSE Final Improvment
+
+By cutting of the extreme values we can further improve our estimate. We get the following result:
+
+```{R}
+RMSE_limits <- RMSE(validation$rating, reg_predicted_ratings_limit)
+RMSE_limits
+```
+
+$$
+RMSE_{limits} = 0.8649177
+$$
+
+
+\pagebreak
+
+# Conclusion
+
+## Summary
+
+To conclude, here's a brief recap of our results:
+
+| Method                         | Results                             |
+| ------------------------------ | ----------------------------------- |
+| Overall Mean                   |  `r RMSE_overallmean`               |
+| User and Movie bias            |  `r RMSE_biases`                    |
+| Regularization                 |  `r RMSE_reg`                       |
+| Regularization with limits     |  `r RMSE_limits`                    |
+
+Our final best RMSE is **`r RMSE_limits`**, which means that on average the predicted value differs from the real value by `r RMSE_limits`.
+
+
+
+## Further Work
+
+Even though our RMSE score is sufficiently low according to the objective we could pursue different approaches. The Random Forest algorithm could be applied here but due to the size of the dataset its complexity it would require too much computational power.
+
+Another approach would be to use the Tensorflow library but due to the nature of the data this would require modifying our dataset using one-hot encoding. Furthermore, this method is also computationally intensive.

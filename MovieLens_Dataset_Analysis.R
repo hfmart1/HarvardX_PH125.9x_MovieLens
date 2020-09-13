@@ -1,22 +1,25 @@
-##########################################################
-# Create edx set, validation set (final hold-out test set)
-##########################################################
-
-# Note: this process could take a couple of minutes
+#########################################################################################
+# IMPORT LIBRARIES
+#########################################################################################
 
 if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
 if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
 if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
-if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
 if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
-
 
 library(tidyverse)
 library(caret)
 library(data.table)
-library(randomForest)
-library(dplyr)
+library(dplyr, warn.conflicts = FALSE)
 
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
+#########################################################################################
+# Create edx set, validation set (final hold-out test set)
+#########################################################################################
+
+# Note: this process could take a couple of minutes
 
 # MovieLens 10M dataset:
 # https://grouplens.org/datasets/movielens/10m/
@@ -37,11 +40,12 @@ movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
                                            genres = as.character(genres))
 
 
+
 movielens <- left_join(ratings, movies, by = "movieId")
 
 
 # Validation set will be 10% of MovieLens data
-set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+set.seed(2, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
 test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
 edx <- movielens[-test_index,]
 temp <- movielens[test_index,]
@@ -57,47 +61,46 @@ edx <- rbind(edx, removed)
 
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
-###################################################################################################
-# DATA ANALYSIS ON CLEAN DATASET
-###################################################################################################
+#########################################################################################
+# DATA ANALYSIS ON CLEAN DATASET (edX Quiz)
+#########################################################################################
 
-# Dimension edx dataset
-dim(edx)
-
-# Number of ratings
-table(edx$rating)
-
-# Number of unique movies
-n_distinct(edx$movieId)
-
-# Number of different users
-n_distinct(edx$userId)
-
-# How many movie ratings are in each genre in the edx dataset?
-genrecount <- edx %>%
-  separate_rows(genres, sep = "\\|") %>%
-  group_by(genres) %>%
-  summarise(number = n()) %>%
-  arrange(desc(number))
-
-genrecount
-
-#Barplot genrecount
-
-barplot(genrecount$number,
-        main = "Number of movies per genre",
-        names.arg = genrecount$genres)
-
-
-# Which movie has the greatest number of ratings?
-num_rating <- edx %>%
-  group_by(title) %>%
-  summarise(number = n()) %>%
-  arrange(desc(number))
-
-# Number of ratings
-barplot(table(edx$rating))
-
+# # Dimension edx dataset
+# dim(edx)
+# 
+# # Number of ratings
+# table(edx$rating)
+# 
+# # Number of unique movies
+# n_distinct(edx$movieId)
+# 
+# # Number of different users
+# n_distinct(edx$userId)
+# 
+# # How many movie ratings are in each genre in the edx dataset?
+# genrecount <- edx %>%
+#   separate_rows(genres, sep = "\\|") %>%
+#   group_by(genres) %>%
+#   summarise(number = n()) %>%
+#   arrange(desc(number))
+# 
+# genrecount
+# 
+# #Barplot genrecount
+# 
+# barplot(genrecount$number,
+#         main = "Number of movies per genre",
+#         names.arg = genrecount$genres)
+# 
+# 
+# # Which movie has the greatest number of ratings?
+# num_rating <- edx %>%
+#   group_by(title) %>%
+#   summarise(number = n()) %>%
+#   arrange(desc(number))
+# 
+# # Number of ratings
+# barplot(table(edx$rating))
 
 #########################################################################################
 # PREDICTION RATING
@@ -108,7 +111,7 @@ RMSE <- function(true_ratings, predicted_ratings){
   sqrt(mean((true_ratings - predicted_ratings)^2))
 }
 
-# RMSE (25 points)
+# RMSE OBJECTTIVES
 # 
 # 0 points: No RMSE reported AND/OR code used to generate the RMSE appears to violate the edX Honor Code.
 # 5 points: RMSE >= 0.90000 AND/OR the reported RMSE is the result of overtraining (validation set - the final hold-out test set - ratings used for anything except reporting the final RMSE value) AND/OR the reported RMSE is the result of simply copying and running code provided in previous courses in the series.
@@ -128,29 +131,32 @@ mu_hat <- mean(edx$rating)
 
 # RMSE average rating
 rmse_1 <- RMSE(validation$rating, mu_hat)
+rmse_1
 
 ########################
 # SECOND APPROACH
 ########################
 
-# However, we notice that some movies seem to have higher average ratings. Lets improve our prediction using this information.
+# We know that certain movies have higher ratings than others, we will include in our prediction the movie bias.
 
 # Compute difference to average per movie
 movie_averages <- edx %>% 
   group_by(movieId) %>% 
-  summarise(b_i = mean(rating - mu_hat))
+  summarise(b_m = mean(rating - mu_hat))
 
+# Compute the predicted rating using the movie bias
 predicted_ratings <- mu_hat + validation %>% 
   left_join(movie_averages, by='movieId') %>%
-  pull(b_i)
+  pull(b_m)
 
-# RMSE movie effect
+# RMSE movie bias
 rmse_2 <- RMSE(predicted_ratings, validation$rating)
 rmse_2
 
 
 # This is still too high, lets use data to improve our approach
 
+# Plot average rating for users with over 100 ratings
 edx %>%
   group_by(userId) %>%
   summarise(a_u = mean(rating)) %>%
@@ -158,32 +164,32 @@ edx %>%
   ggplot(aes(a_u)) +
   geom_histogram(bins = 30, color = "black")
 
-# We notice that some users tend to give more positive or negative reviews. We will call this phenomenon the user-specific effect
+# We notice that some users tend to give more positive or negative reviews, the user bias.
 
-
+# Calculate user rating average and compute user bias with movie bias for each movie
 user_averages <- edx %>%
   left_join(movie_averages, by="movieId") %>%
   group_by(userId) %>%
-  summarise(b_u = mean(rating - mu_hat - b_i))
+  summarise(b_u = mean(rating - mu_hat - b_m))
 
-
+# Compute predicted ratings including movie and user bias
 predicted_ratings <- validation %>% 
   left_join(movie_averages, by='movieId') %>%
   left_join(user_averages, by='userId') %>%
-  mutate(pred = mu_hat + b_i + b_u) %>%
+  mutate(pred = mu_hat + b_m + b_u) %>%
   pull(pred)
-
 
 
 # RMSE user effect
 rmse_3 <- RMSE(predicted_ratings, validation$rating)
 rmse_3
 
+# By observing the predicted ratings we notice that some of them are lower than 0.5 or greater than 5.
 
-
-# Rounding
+# Limit
 predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit values lower than 0.5 & values greater than 5
 
+# Calculate RMSE
 rmse_4 <- RMSE(predicted_ratings_limit, validation$rating)
 rmse_4
 
@@ -199,9 +205,13 @@ rmse_results
 # THIRD APPROACH
 ########################
 
-#In setting the movie penalty, we will try figures from 0 to 60, increasing by increments of 2.
-penalties <- seq(0, 3, 1)
+# We now use regularization to improve our prediction
 
+#In setting the movie penalty, we will create a list between 0 and 10 with increments of 1
+penalties <- seq(0, 10, 1)
+
+
+# Compute RMSE on edx dataset to set best penalty
 m_rmses <- sapply(penalties, function(p){
   reg_movie_avgs <- edx %>% 
     group_by(movieId) %>%
@@ -216,14 +226,16 @@ m_rmses <- sapply(penalties, function(p){
   return(RMSE(predicted_ratings, edx$rating))
 })
 
-moviepenalty_optimal <- penalties[which.min(m_rmses)]  #determine which is lowest
+# Determine the lowest penalty
+moviepenalty_optimal <- penalties[which.min(m_rmses)] 
 
+# Use best penalty to compute movie averages
 reg_movie_avgs <- edx %>% 
   group_by(movieId) %>%
   summarize(regmoviebias = sum(rating - mu_hat)/(n()+moviepenalty_optimal))
 
 
-#Check movie bias against test set
+# Compute prediction for validation dataset using the penalties calculated above
 predicted_ratings <- 
   validation %>% 
   left_join(reg_movie_avgs, by = "movieId") %>%
@@ -231,14 +243,17 @@ predicted_ratings <-
   mutate(regmoviebias = mu_hat + b_u + regmoviebias) %>%
   .$regmoviebias
 
-
+# Compute RMSE for the validation dataset
 regularized_movieeffects <- RMSE(predicted_ratings, validation$rating)
 regularized_movieeffects
 
 
-#Now let's do the same for user penalties.
+#We do the same for the user bias, we use regularization
+
+# Set penalties to test
 penalties <- seq(0, 1, 0.25)
 
+# Compute RMSE on edx dataset to set best penalty
 u_rmses <- sapply(penalties, function(p){
   reg_user_avgs <- edx %>% 
     left_join(reg_movie_avgs, by="movieId") %>%
@@ -254,20 +269,18 @@ u_rmses <- sapply(penalties, function(p){
   return(RMSE(predicted_ratings, edx$rating))
 })
 
+# Determine the lowest penalty
 userpenalty_optimal <- penalties[which.min(u_rmses)]  #determine which is lowest
 
 
-#Let's check both penalty values against the *test* set and see how it affects our RMSE.
-#build table with optimal penalty    
-
+# Use best penalty to compute movie averages using both the movie and user bias regularization
 reg_user_avgs <- edx %>% 
   left_join(reg_movie_avgs, by="movieId") %>%
   group_by(userId) %>%
   summarize(reguserbias = sum(rating - regmoviebias - mu_hat)/(n()+userpenalty_optimal))
 
 
-
-
+# Compute prediction for validation dataset using the penalties calculated above
 reg_predicted_ratings <- 
   validation %>% 
   left_join(reg_movie_avgs, by = "movieId") %>%
@@ -275,186 +288,11 @@ reg_predicted_ratings <-
   mutate(regusermovie = mu_hat + regmoviebias + reguserbias) %>%
   .$regusermovie
 
-
+# Compute RMSE
 regularized_effects <- RMSE(reg_predicted_ratings, validation$rating)
 
-
-reg_predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit values lower than 0.5 & values greater than 5
+# Fix lower and upper limits
+reg_predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  
 
 regularized_effects_limit <- RMSE(reg_predicted_ratings_limit, validation$rating)
-
-
-########################
-# FOURTH APPROACH
-########################
-
-library(tensorflow)
-install_tensorflow()
-library(keras)
-keras::install_keras()
-
-hello <- tf$constant("Hello")
-print(hello)
-
-
-train_features <- edx%>%
-  mutate(
-  temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
-  release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
-  release_yr = as.numeric(release_yr)                          #...convert to a number
-) %>%
-  select(-everything(), movieId, userId, release_yr)
-
-train_labels <- edx %>%
-  select(rating)
-
-test_features <- edx%>%
-  mutate(
-    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
-    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
-    release_yr = as.numeric(release_yr)                          #...convert to a number
-  ) %>%
-  select(-everything(), movieId, userId, release_yr)
-
-test_labels <- edx %>%
-  select(rating)
-
-model <- keras_model_sequential()
-model %>% 
-  layer_dense(units = 3, activation = 'relu', input_shape = 3) %>% 
-  layer_dense(units = 1, activation = 'softmax')
-
-model %>% summary
-
-
-model %>% compile(
-  loss      = 'categorical_crossentropy',
-  optimizer = optimizer_rmsprop(),
-  metrics   = c('accuracy')
-)
-
-history <- model %>% fit(
-  x = train_features, y = train_labels,
-  epochs           = 200,
-  batch_size       = 20,
-  validation_split = 0
-)
-plot(history)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#####################################"
-
-
-############################ TEST2
-
-clean_edx <- edx %>%
-  mutate(
-    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
-    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
-    release_yr = as.numeric(release_yr)                          #...convert to a number
-  ) %>%
-  select(-everything(), movieId, userId, rating, release_yr)
-
-
-trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
-
-knn_fit <- train(rating ~., 
-                 data = clean_edx,
-                 method = "knn",
-                 trControl=trctrl,
-                 preProcess = c("center", "scale"),
-                 tuneLength = 10)
-
-confusionMatrix(predict(train_knn, mnist_27$test, type = "raw"),
-                mnist_27$test$y)$overall["Accuracy"]
-
-
-
-#####################################"
-
-
-
-age <- edx %>%
-  mutate(
-    temp = str_extract(title, regex(   "\\((\\d{4})\\)"   )),   #extract the year of release in brackets
-    release_yr = str_extract(temp, regex(   "(\\d{4})"   )),     #remove the brackets and...
-    release_yr = as.numeric(release_yr)                          #...convert to a number
-  ) %>%
-  select(-everything(), movieId, rating, release_yr)
-
-age
-
-age %>%
-  group_by(release_yr) %>%
-  ggplot (aes(x=release_yr, y=mean(rating))) +
-  geom_point()
-
-
-# Compute difference to average per movie
-year_averages <- age %>%
-  group_by(movieId) %>%
-  summarise(b_y = mean(rating - mu_hat))
-
-predicted_ratings <- validation %>%
-  left_join(movie_averages, by='movieId') %>%
-  left_join(user_averages, by='userId') %>%
-  left_join(year_averages, by="movieId") %>%
-  mutate(pred = mu_hat + b_i + b_u + 0*b_y) %>%
-  pull(pred)
-
-predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)  #limit values lower than 0.5 & values greater than 5
-
-
-# RMSE movie effect
-rmse_5 <- RMSE(predicted_ratings_limit, validation$rating)
-rmse_5
-
-
-
-
-
-
-age %>%
-  group_by(release_yr) %>%
-  summarize(  n = n(), 				sd = sd(rating) ,		se  = sd/sqrt(n) , 		avg = mean(rating) 				) %>%
-  
-  ggplot (aes(x=release_yr, y=avg)) +
-  geom_point() +
-  geom_errorbar(aes(ymin=avg-se, ymax=avg+se), width=0.4, colour="red", alpha=0.8, size=1.3) +
-  theme(axis.text.x = element_text(angle = 30, hjust = 1)) +
-  geom_hline(yintercept = mu_hat)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# edx %>% group_by(releaseyear) %>%
-#   summarize(rating = mean(rating)) %>%
-#   ggplot(aes(releaseyear, rating)) +
-#   geom_point() +
-#   theme_hc() + 
-#   geom_smooth() +
-#   ggtitle("Release Year vs. Rating")
+regularized_effects_limit
