@@ -296,3 +296,219 @@ reg_predicted_ratings_limit <- pmax(pmin(predicted_ratings, 5),     0.5)
 
 regularized_effects_limit <- RMSE(reg_predicted_ratings_limit, validation$rating)
 regularized_effects_limit
+
+
+
+##########################################################
+# Neural Network: Data transformation
+##########################################################
+
+# Mutate the timestamp to be 0 or 1 depending on the moment ratings start to have 0.5 granularity = 1045526400
+edx <- edx %>% mutate(timestamp_binary = ifelse(edx$timestamp > 1045526400, 1, 0))
+validation <- validation %>% mutate(timestamp_binary = ifelse(validation$timestamp > 1045526400, 1, 0))
+
+############
+# One-hot encoding of genres
+############
+
+genres <- as.data.frame(edx$genres, stringsAsFactors=FALSE)
+genres_v <- as.data.frame(validation$genres, stringsAsFactors=FALSE)
+# n_distinct(edx_copy$genres)
+genres2 <- as.data.frame(tstrsplit(genres[,1], '[|]',
+                                   type.convert=TRUE),
+                         stringsAsFactors=FALSE)
+genres2_v <- as.data.frame(tstrsplit(genres_v[,1], '[|]',
+                                     type.convert=TRUE),
+                           stringsAsFactors=FALSE)
+
+
+genre_list <- c("Action", "Adventure", "Animation", "Children",
+                "Comedy", "Crime","Documentary", "Drama", "Fantasy",
+                "Film-Noir", "Horror", "Imax", "Musical", "Mystery","Romance",
+                "Sci-Fi", "Thriller", "War", "Western") # There are 19 genres in total
+
+genre_matrix <- matrix(0, length(edx$movieId)+1, n_distinct(genre_list))                       
+genre_matrix[1,] <- genre_list #set first row to genre list
+
+genre_matrix_v <- matrix(0, length(validation$movieId)+1, n_distinct(genre_list))                       
+genre_matrix_v[1,] <- genre_list #set first row to genre list
+
+colnames(genre_matrix) <- genre_list #set column names to genre list
+colnames(genre_matrix_v) <- genre_list #set column names to genre list
+
+#iterate through matrix
+for (i in 1:nrow(genres2)) {
+  for (c in 1:ncol(genres2)) {
+    genmat_col <- which(genre_matrix[1,] == genres2[i,c])
+    genre_matrix[i+1,genmat_col] <- 1L
+  }
+}
+
+for (i in 1:nrow(genres2_v)) {
+  for (c in 1:ncol(genres2_v)) {
+    genmat_col <- which(genre_matrix_v[1,] == genres2_v[i,c])
+    genre_matrix_v[i+1,genmat_col] <- 1L
+  }
+}
+#convert into dataframe
+genre_matrix <- as.data.frame(genre_matrix[-1,], stringsAsFactors=FALSE) #remove first row, which was the genre list
+genre_matrix_v <- as.data.frame(genre_matrix_v[-1,], stringsAsFactors=FALSE)
+
+edx_by_gen <- cbind(edx[,1:3], genre_matrix, edx$timestamp_binary) 
+val_by_gen <- cbind(validation[,1:3], genre_matrix_v, validation$timestamp_binary)
+colnames(edx_by_gen) <- c("userId", "movieId", "rating", genre_list, "timestamp_binary")
+colnames(val_by_gen) <- c("userId", "movieId", "rating", genre_list, "timestamp_binary")
+edx_by_gen <- as.matrix(sapply(edx_by_gen, as.numeric))
+val_by_gen <- as.matrix(sapply(val_by_gen, as.numeric))
+
+
+# remove intermediary matrices
+rm(genre_matrix, genre_matrix_v, genres, genres_v, genres2, genres2_v)
+
+
+# Multiply the rating by the OHE for genre
+edx_by_gen_mult <- cbind(edx_by_gen[,1:2], edx_by_gen[,"rating"], sweep(edx_by_gen[,4:22], 1, edx_by_gen[,"rating"], "*"), edx_by_gen[,"timestamp_binary"])
+val_by_gen_mult <- cbind(val_by_gen[,1:2], val_by_gen[,"rating"], sweep(val_by_gen[,4:22], 1, val_by_gen[,"rating"], "*"), val_by_gen[,"timestamp_binary"])
+
+
+colnames(edx_by_gen_mult) <- c("userId", "movieId", "rating", "Action", "Adventure", "Animation", "Children",
+                               "Comedy", "Crime", "Documentary", "Drama", "Fantasy",
+                               "Film.Noir", "Horror", "Imax", "Musical", "Mystery","Romance",
+                               "Sci.Fi", "Thriller", "War", "Western", "timestamp_binary")
+
+colnames(val_by_gen_mult) <- c("userId", "movieId", "rating", "Action", "Adventure", "Animation", "Children",
+                               "Comedy", "Crime", "Documentary", "Drama", "Fantasy",
+                               "Film.Noir", "Horror", "Imax", "Musical", "Mystery","Romance",
+                               "Sci.Fi", "Thriller", "War", "Western", "timestamp_binary")
+
+
+# Transform the multiplied one-hot-encoded matrix into a user profile for genre.
+user_profiles <- edx_by_gen_mult %>%
+  as.data.frame() %>%
+  group_by(userId) %>%
+  summarise(Action_u = mean(Action),
+            Adventure_u = mean(Adventure),
+            Animation_u = mean(Animation),
+            Children_u = mean(Children),
+            Comedy_u = mean(Comedy),
+            Crime_u = mean(Crime),
+            Documentary_u = mean(Documentary),
+            Drama_u = mean(Drama),
+            Fantasy_u = mean(Fantasy),
+            FilmNoir_u = mean(Film.Noir),
+            Horror_u = mean(Horror),
+            Imax_u = mean(Imax), 
+            Musical_u = mean(Musical),
+            Mystery_u = mean(Mystery),
+            Romance_u = mean(Romance),
+            Sci.Fi_u = mean(Sci.Fi),
+            Thriller_u = mean(Thriller),
+            War_u = mean(War),
+            Western_u = mean(Western)) %>%
+  as.data.frame()
+
+
+user_profiles[is.na(user_profiles)] <- 0
+
+# Transform the Test and Validation datasets to include the user profiles
+edx_gen_norm <- edx %>%
+  left_join(user_profiles, by="userId") %>%
+  select(userId, 
+         movieId, 
+         rating, 
+         Action_u, 
+         Adventure_u, 
+         Animation_u,
+         Children_u, 
+         Comedy_u,  
+         Crime_u,
+         Documentary_u, 
+         Drama_u,
+         Fantasy_u,
+         FilmNoir_u,  
+         Horror_u, 
+         Imax_u,
+         Musical_u, 
+         Mystery_u, 
+         Romance_u, 
+         Sci.Fi_u,  
+         Thriller_u,  
+         War_u, 
+         Western_u, 
+         timestamp_binary)
+
+val_gen_norm <- validation %>%
+  left_join(user_profiles, by="userId") %>%
+  select(userId, 
+         movieId, 
+         rating, 
+         Action_u, 
+         Adventure_u, 
+         Animation_u,
+         Children_u, 
+         Comedy_u,  
+         Crime_u,
+         Documentary_u, 
+         Drama_u,
+         Fantasy_u,
+         FilmNoir_u,  
+         Horror_u, 
+         Imax_u,
+         Musical_u, 
+         Mystery_u, 
+         Romance_u, 
+         Sci.Fi_u,  
+         Thriller_u,  
+         War_u, 
+         Western_u, 
+         timestamp_binary)
+
+
+library(h2o)
+h2o.init(nthreads = -1, max_mem_size = "16G")
+
+
+
+##################
+# Define the model in h2o
+
+# turn the matrices into h2o objects
+edx_h2o <- as.h2o(edx_gen_norm)
+val_h2o <- as.h2o(val_gen_norm)
+
+# Specify labels and predictors
+y <- "rating"
+x <- setdiff(names(edx_h2o), y)
+
+# Turn the labels into categorical data.
+edx_h2o[,y] <- as.factor(edx_h2o[,y])
+val_h2o[,y] <- as.factor(val_h2o[,y])
+
+# Train a deep learning model and validate on test set
+
+DL_model <- h2o.deeplearning(
+  x = x,
+  y = y,
+  training_frame = edx_h2o,
+  validation_frame = val_h2o,
+  distribution = "AUTO",
+  activation = "RectifierWithDropout",
+  hidden = c(256, 256, 256, 256),
+  input_dropout_ratio = 0.2,
+  sparse = TRUE,
+  epochs = 15,
+  stopping_rounds = 3,
+  stopping_tolerance = 0.01, #stops if it doesn't improve at least 0.1%
+  stopping_metric = "AUTO",
+  nfolds = 10,
+  variable_importances = TRUE,
+  shuffle_training_data = TRUE,
+  mini_batch_size = 2000
+)
+
+
+
+# Get RMSE
+DL_RMSE_validation <- h2o.rmse(DL_model, valid = TRUE) # Validation RMSE = 0.8236556
+DL_RMSE_training <- h2o.rmse(DL_model) # Train RMSE = 0.8241222
+
